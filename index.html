@@ -42,7 +42,7 @@
             transition: background 0.3s ease, color 0.3s ease;
         }
 
-        /* Overlay implementation */
+        /* Overlay implementation - Click-through enabled */
         body::after {
             content: ""; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
             background: var(--filter); pointer-events: none; z-index: 9999;
@@ -62,7 +62,6 @@
         nav button { color: var(--text-sub); font-size: 11px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
         nav button.active { color: var(--primary); font-weight: 700; }
         
-        /* Using CSS vars for cards to ensure Dark Mode works */
         .card-panel { 
             background: var(--card); 
             border: 1px solid var(--border); 
@@ -78,7 +77,7 @@
             border-radius: 50%; 
             display: flex; align-items: center; justify-content: center; 
             cursor: pointer; font-size: 18px; transition: 0.2s; 
-            background: var(--bg); /* Ensure empty circles aren't transparent in dark mode */
+            background: var(--bg); 
         }
         .state-taken { background: var(--success); border-color: var(--success); color: white; }
         .state-missed { background: var(--danger); border-color: var(--danger); color: white; }
@@ -87,6 +86,15 @@
             font-size: 10px; padding: 2px 8px; border-radius: 10px; 
             font-weight: 800; border: 1px solid var(--border); 
             background: var(--bg); color: var(--text-sub); 
+        }
+
+        /* Date Navigation Buttons */
+        .date-nav-btn {
+            background: var(--bg); color: var(--text-main);
+            border: 1px solid var(--border);
+            width: 36px; height: 36px;
+            border-radius: 10px; font-weight: bold;
+            display: flex; align-items: center; justify-content: center;
         }
 
         /* Inputs adapt to theme */
@@ -103,6 +111,7 @@
             <input type="email" id="login-email" placeholder="Email" class="w-full p-4 mb-4 rounded-2xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 text-black">
             <input type="password" id="login-password" placeholder="Password" class="w-full p-4 mb-6 rounded-2xl bg-slate-50 border-none outline-none focus:ring-2 focus:ring-indigo-500 text-black">
             <button id="login-btn" class="w-full bg-indigo-600 text-white p-4 rounded-2xl font-bold shadow-lg hover:bg-indigo-700 transition">Sign In / Register</button>
+            <p class="text-center text-xs text-slate-400 mt-4">Logging in with a new email automatically creates an account.</p>
         </div>
     </div>
 
@@ -141,8 +150,15 @@
                 <div id="manageList"></div>
             </section>
 
-            <section id="screen-track" class="screen space-y-8">
-                <p id="todayDateDisplay" class="text-center text-sm font-bold opacity-50 uppercase tracking-widest"></p>
+            <section id="screen-track" class="screen space-y-6">
+                <div class="card-panel flex justify-between items-center py-2">
+                    <button onclick="changeDate(-1)" class="date-nav-btn">←</button>
+                    <div class="text-center">
+                        <div id="dateDisplayDay" class="text-[10px] font-black opacity-50 uppercase tracking-widest">TODAY</div>
+                        <div id="dateDisplayDate" class="text-sm font-bold">...</div>
+                    </div>
+                    <button onclick="changeDate(1)" class="date-nav-btn">→</button>
+                </div>
                 
                 <div id="tracker-container" class="space-y-6">
                     <div id="slot-morning" class="hidden"><h4 class="text-xs font-black text-orange-500 uppercase mb-3 px-1">☀️ Morning</h4><div class="list"></div></div>
@@ -163,7 +179,7 @@
 
         <nav>
             <button onclick="showScreen('add')" id="nav-add" class="active"><span class="text-xl">📋</span>Meds</button>
-            <button onclick="showScreen('track')" id="nav-track"><span class="text-xl">✅</span>Today</button>
+            <button onclick="showScreen('track')" id="nav-track"><span class="text-xl">✅</span>Day</button>
             <button onclick="showScreen('stats')" id="nav-stats"><span class="text-xl">📊</span>Stats</button>
         </nav>
     </div>
@@ -173,7 +189,7 @@
         import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, onAuthStateChanged, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
         import { getFirestore, doc, setDoc, onSnapshot, collection, addDoc, deleteDoc, serverTimestamp, query, orderBy } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
-        // YOUR ACTUAL FIREBASE KEYS
+        // YOUR FIREBASE KEYS
         const firebaseConfig = {
           apiKey: "AIzaSyBy4FKc0uWiFQY8gE1HvZVsKH0D1yhpyQw",
           authDomain: "pill-tracker-dd696.firebaseapp.com",
@@ -192,27 +208,41 @@
         let userPills = [];
         let globalHistory = [];
         let currentEditId = null;
+        let viewDateOffset = 0; // 0 = Today, -1 = Yesterday
 
-        // --- THEME MANAGEMENT ---
+        // --- THEME ---
         window.setTheme = (mode) => {
             document.body.classList.remove('dark', 'blue-filter');
             if(mode === 'dark') document.body.classList.add('dark');
             if(mode === 'blue') document.body.classList.add('blue-filter');
             localStorage.setItem('pillTheme', mode);
         };
-        // Apply saved theme immediately
         setTheme(localStorage.getItem('pillTheme') || 'light');
 
-        const getLocalData = () => {
+        // --- DATE ENGINE ---
+        const getViewDateData = () => {
             const d = new Date();
+            d.setDate(d.getDate() + viewDateOffset); // Apply offset (Time Travel)
+            
             const year = d.getFullYear();
             const month = String(d.getMonth() + 1).padStart(2, '0');
             const day = String(d.getDate()).padStart(2, '0');
+            
+            const isToday = viewDateOffset === 0;
+            const isYesterday = viewDateOffset === -1;
+            const verboseLabel = isToday ? 'TODAY' : isYesterday ? 'YESTERDAY' : d.toLocaleDateString(undefined, { weekday: 'long' });
+
             return {
-                id: `${year}-${month}-${day}`,
+                id: `${year}-${month}-${day}`, // Key for Database
                 display: `${month}/${day}/${year}`,
-                verbose: d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })
+                label: verboseLabel,
+                fullDate: d.toLocaleDateString(undefined, { weekday: 'short', month: 'long', day: 'numeric' })
             };
+        };
+
+        window.changeDate = (delta) => {
+            viewDateOffset += delta;
+            render();
         };
 
         window.showScreen = (id) => {
@@ -223,6 +253,7 @@
             render();
         };
 
+        // --- AUTH & SYNC ---
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 userId = user.uid;
@@ -241,6 +272,7 @@
             onSnapshot(query(collection(db, `users/${userId}/history`), orderBy('timestamp', 'desc')), (s) => { globalHistory = s.docs.map(d => ({id: d.id, ...d.data()})); render(); });
         }
 
+        // --- ACTIONS ---
         document.getElementById('add-pill-btn').addEventListener('click', async () => {
             const name = document.getElementById('pillInput').value.trim();
             const sched = {
@@ -278,12 +310,13 @@
         };
 
         window.toggleCycle = async (pillId, pillName, time) => {
-            const local = getLocalData();
-            const logId = `${local.id}_${pillId}_${time}`;
+            const dateData = getViewDateData(); // Use displayed date
+            const logId = `${dateData.id}_${pillId}_${time}`;
             const current = globalHistory.find(h => h.id === logId);
+            
             if (!current) {
                 await setDoc(doc(db, `users/${userId}/history`, logId), {
-                    status: 'taken', pillName, timeSlot: time, dateDisplay: local.display, dateId: local.id,
+                    status: 'taken', pillName, timeSlot: time, dateDisplay: dateData.display, dateId: dateData.id,
                     timestamp: serverTimestamp(), displayTime: new Date().toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})
                 });
             } else if (current.status === 'taken') {
@@ -295,7 +328,7 @@
 
         window.exportReport = () => {
             let report = `MEDICATION REPORT\nGenerated: ${new Date().toLocaleString()}\n\n`;
-            // Sort by time descending
+            // Sort history by real timestamp descending
             const sorted = [...globalHistory].sort((a,b) => (b.timestamp?.seconds || 0) - (a.timestamp?.seconds || 0));
             sorted.slice(0, 100).forEach(h => {
                 report += `[${h.dateDisplay} ${h.displayTime}] ${h.pillName} - ${h.status.toUpperCase()}\n`;
@@ -304,16 +337,22 @@
             win.document.write(`<pre style="font-family:monospace; padding:20px;">${report}</pre>`);
         };
 
+        // --- RENDER ENGINE ---
         function render() {
-            const local = getLocalData();
-            document.getElementById('todayDateDisplay').innerText = local.verbose;
+            const dateData = getViewDateData();
+            document.getElementById('dateDisplayDay').innerText = dateData.label;
+            document.getElementById('dateDisplayDate').innerText = dateData.fullDate;
 
+            // Render Manage List
             document.getElementById('manageList').innerHTML = userPills.map(p => `
                 <div class="card-panel flex justify-between items-center">
                     <div>
                         <div class="font-bold text-lg">${p.name}</div>
                         <div class="flex gap-1 mt-1 opacity-70">
-                            ${p.morning ? '<span class="time-chip">AM</span>':''} ${p.afternoon ? '<span class="time-chip">NOON</span>':''} ${p.night ? '<span class="time-chip">PM</span>':''} ${p.prn ? '<span class="time-chip" style="color:var(--primary); border-color:var(--primary)">PRN</span>':''}
+                            ${p.morning ? '<span class="time-chip">AM</span>':''} 
+                            ${p.afternoon ? '<span class="time-chip">NOON</span>':''} 
+                            ${p.night ? '<span class="time-chip">PM</span>':''} 
+                            ${p.prn ? '<span class="time-chip" style="color:var(--primary); border-color:var(--primary)">PRN</span>':''}
                         </div>
                     </div>
                     <div class="flex gap-4">
@@ -323,13 +362,14 @@
                 </div>
             `).join('');
 
+            // Render Track List (Filtered by Schedule & History Date)
             ['morning', 'afternoon', 'night', 'prn'].forEach(slot => {
                 const filtered = userPills.filter(p => p[slot]);
                 const container = document.getElementById(`slot-${slot}`);
                 if (filtered.length > 0) {
                     container.classList.remove('hidden');
                     container.querySelector('.list').innerHTML = filtered.map(p => {
-                        const h = globalHistory.find(x => x.id === `${local.id}_${p.id}_${slot}`);
+                        const h = globalHistory.find(x => x.id === `${dateData.id}_${p.id}_${slot}`);
                         return `
                             <div class="card-panel flex justify-between items-center">
                                 <div><div class="font-bold">${p.name}</div><div class="text-[10px] font-black uppercase opacity-40">${h ? h.status + ' at ' + h.displayTime : 'Pending'}</div></div>
@@ -340,12 +380,16 @@
                 } else { container.classList.add('hidden'); }
             });
 
+            // Render Stats List (Grouped by Date)
             const historyByDate = {};
             globalHistory.forEach(h => {
                 if(!historyByDate[h.dateDisplay]) historyByDate[h.dateDisplay] = [];
                 historyByDate[h.dateDisplay].push(h);
             });
-            document.getElementById('historyByDate').innerHTML = Object.keys(historyByDate).map(date => {
+            // Sort dates descending
+            const sortedDates = Object.keys(historyByDate).sort((a,b) => new Date(b) - new Date(a));
+            
+            document.getElementById('historyByDate').innerHTML = sortedDates.map(date => {
                 const logs = historyByDate[date].sort((a,b) => {
                     const order = { morning: 1, afternoon: 2, night: 3, prn: 4 };
                     return order[a.timeSlot] - order[b.timeSlot];
